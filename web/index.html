@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Robo</title>
+  <style>
+    :root { color-scheme: dark; }
+    body { font-family: -apple-system, system-ui, sans-serif; margin: 0; background:#111; color:#eee; }
+    .wrap { max-width: 560px; margin: 0 auto; padding: 24px; }
+    h1 { font-weight: 600; }
+    .pad { display:grid; grid-template-columns: repeat(3, 1fr); gap:10px; margin: 16px 0; }
+    button { padding: 18px; font-size: 16px; border:0; border-radius:12px; background:#2b6cff; color:#fff; cursor:pointer; }
+    button.sec { background:#333; }
+    button:active { transform: scale(0.97); }
+    .row { display:flex; gap:10px; margin:10px 0; }
+    input[type=text] { flex:1; padding:14px; border-radius:12px; border:1px solid #333; background:#1a1a1a; color:#eee; }
+    .tele { display:grid; grid-template-columns: 1fr 1fr; gap:8px; background:#1a1a1a; padding:16px; border-radius:12px; }
+    .tele div { font-variant-numeric: tabular-nums; }
+    .k { color:#888; }
+    .feed { width:100%; border-radius:12px; background:#000; aspect-ratio: 4/3; object-fit: contain; }
+    label.chk { display:flex; align-items:center; gap:8px; color:#bbb; font-size:14px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>🤖 Robo</h1>
+
+    <img class="feed" id="feed" src="/stream.mjpg" alt="camera feed" />
+
+    <div class="pad">
+      <span></span>
+      <button onpointerdown="drive(0.8,0.8)" onpointerup="stop()">▲</button>
+      <span></span>
+      <button onpointerdown="drive(-0.7,0.7)" onpointerup="stop()">◀</button>
+      <button class="sec" onclick="stop()">■</button>
+      <button onpointerdown="drive(0.7,-0.7)" onpointerup="stop()">▶</button>
+      <span></span>
+      <button onpointerdown="drive(-0.8,-0.8)" onpointerup="stop()">▼</button>
+      <span></span>
+    </div>
+
+    <div class="row">
+      <input id="say" type="text" placeholder="Say something…" />
+      <button onclick="say()">Speak</button>
+    </div>
+
+    <div class="row">
+      <input id="cmd" type="text" placeholder="Tell the robot what to do…" />
+      <button onclick="instruct()">Send</button>
+    </div>
+    <div class="row">
+      <label class="chk"><input type="checkbox" id="vision" /> Let the robot see (send camera frame to the AI)</label>
+    </div>
+
+    <div class="row">
+      <button class="sec" id="auto" onclick="toggleAuto()">Autonomous: off</button>
+    </div>
+
+    <div class="row">
+      <button id="ptt">🎤 Hold to talk</button>
+      <button class="sec" id="listen" onclick="toggleListen()">Robot ears: off</button>
+    </div>
+    <div class="row"><span class="k" id="heard">&nbsp;</span></div>
+
+    <h3>Telemetry</h3>
+    <div class="tele">
+      <div><span class="k">left</span> <span id="left">—</span></div>
+      <div><span class="k">right</span> <span id="right">—</span></div>
+      <div><span class="k">distance</span> <span id="distance_cm">—</span> cm</div>
+      <div><span class="k">motion</span> <span id="motion_detected">—</span></div>
+      <div><span class="k">light</span> <span id="light_level">—</span></div>
+    </div>
+  </div>
+
+  <script>
+    const post = (path, body) => fetch(path, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body||{})});
+    const drive = (l, r) => post('/api/drive', {left:l, right:r});
+    const stop = () => post('/api/stop');
+    const say = () => { const t = document.getElementById('say').value; if (t) post('/api/say', {text:t}); };
+    const instruct = () => { const t = document.getElementById('cmd').value; const v = document.getElementById('vision').checked; if (t) post('/api/instruct', {text:t, use_vision:v}); };
+    let auto = false;
+    const toggleAuto = () => { auto = !auto; post('/api/autonomous', {on:auto}); document.getElementById('auto').textContent = 'Autonomous: ' + (auto?'on':'off'); };
+
+    // --- voice: hold-to-talk records in the browser, posts to /api/voice ---
+    let recorder, chunks = [];
+    const ptt = document.getElementById('ptt');
+    const heard = document.getElementById('heard');
+    async function startRec() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({audio:true});
+        recorder = new MediaRecorder(stream);
+        chunks = [];
+        recorder.ondataavailable = e => chunks.push(e.data);
+        recorder.onstop = async () => {
+          stream.getTracks().forEach(t => t.stop());
+          const blob = new Blob(chunks, {type:'audio/webm'});
+          const fd = new FormData();
+          fd.append('audio', blob, 'clip.webm');
+          heard.textContent = '… transcribing';
+          const r = await fetch('/api/voice', {method:'POST', body:fd});
+          const j = await r.json();
+          heard.textContent = j.transcript ? `heard: “${j.transcript}”` : '(nothing heard)';
+        };
+        recorder.start();
+        ptt.textContent = '● recording…';
+      } catch (e) { heard.textContent = 'mic error: ' + e.message; }
+    }
+    const stopRec = () => { if (recorder && recorder.state !== 'inactive') recorder.stop(); ptt.textContent = '🎤 Hold to talk'; };
+    ptt.addEventListener('pointerdown', startRec);
+    ptt.addEventListener('pointerup', stopRec);
+    ptt.addEventListener('pointerleave', stopRec);
+
+    let listening = false;
+    async function toggleListen() {
+      listening = !listening;
+      const r = await fetch('/api/listening', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({on:listening})});
+      const j = await r.json();
+      listening = j.listening ?? false;
+      document.getElementById('listen').textContent = 'Robot ears: ' + (listening?'on':'off');
+      if (j.error) heard.textContent = 'listen error: ' + j.error;
+    }
+
+    const ws = new WebSocket(`ws://${location.host}/ws/telemetry`);
+    ws.onmessage = (e) => {
+      const t = JSON.parse(e.data);
+      for (const k of ['left_speed','right_speed','distance_cm','motion_detected','light_level']) {}
+      document.getElementById('left').textContent = t.left_speed.toFixed(2);
+      document.getElementById('right').textContent = t.right_speed.toFixed(2);
+      document.getElementById('distance_cm').textContent = t.distance_cm ?? '—';
+      document.getElementById('motion_detected').textContent = t.motion_detected ? 'yes' : 'no';
+      document.getElementById('light_level').textContent = t.light_level ?? '—';
+    };
+  </script>
+</body>
+</html>
