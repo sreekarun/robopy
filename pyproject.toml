@@ -18,6 +18,7 @@ pi = [
     "gpiozero>=2.0",
     "lgpio>=0.2",
     "picamera2>=0.3",
+    "piper-tts>=1.2",
 ]
 # Mac (and any non-Pi machine): webcam capture
 mac = [

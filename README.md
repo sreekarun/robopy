@@ -65,10 +65,23 @@ pytest                     # smoke tests, no hardware
 
 ## Deploy to the Raspberry Pi 5
 
+The quickest way is the included setup script, which installs all system
+dependencies, creates a virtual environment, and registers the systemd service:
+
+```bash
+git clone <your-repo> ~/robopy && cd ~/robopy
+bash setup_pi.sh           # base setup (GPIO + camera + Piper TTS + voice model download)
+bash setup_pi.sh --voice   # also install faster-whisper (offline STT)
+bash setup_pi.sh --ai      # also install anthropic SDK + prompt for key
+bash setup_pi.sh --voice --ai  # everything
+```
+
+Or manually:
+
 ```bash
 git clone <your-repo> ~/robopy && cd ~/robopy
 python3 -m venv .venv && source .venv/bin/activate
-pip install -e '.[pi]'     # gpiozero + lgpio + picamera2
+pip install -e '.[pi]'     # gpiozero + lgpio + picamera2 + piper-tts
 # edit pin numbers in robo/hardware/gpiozero_backend.py to match your wiring
 sudo cp systemd/robo.service /etc/systemd/system/
 sudo systemctl enable --now robo
