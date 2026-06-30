@@ -5,8 +5,10 @@
 #   bash setup_pi.sh [--voice] [--ai]
 #
 #   --voice   Install faster-whisper + sounddevice for speech-to-text
-#             and download the Piper TTS voice model
 #   --ai      Install the anthropic SDK and prompt for ROBO_ANTHROPIC_API_KEY
+#
+# The Piper TTS voice model is always downloaded as part of the base install
+# because the default Pi speech backend (`piper`) requires it.
 #
 # Example (full install with voice and AI):
 #   bash setup_pi.sh --voice --ai
@@ -53,6 +55,7 @@ APT_PKGS=(
   python3-dev       # headers for compiling any C extensions
   python3-pip       # bootstrap pip inside the venv
   git               # in case the repo was downloaded as a zip
+  curl              # downloading the Piper TTS voice model
   alsa-utils        # aplay — plays Piper TTS output
   libjpeg-dev       # Pillow / camera image encoding
 )
@@ -84,26 +87,29 @@ cd "$REPO_DIR"
 pip install -e '.[pi]' --quiet
 ok "Installed .[pi]"
 
+# ── Piper TTS voice model ─────────────────────────────────────────────────────
+# Always downloaded: the default Pi speech backend is `piper`, which needs the
+# model file at startup. Without it, TTS will fail even on a base install.
+VOICES_DIR="$REPO_DIR/voices"
+VOICE_ONNX="$VOICES_DIR/en_US-amy-medium.onnx"
+VOICE_JSON="$VOICES_DIR/en_US-amy-medium.onnx.json"
+if [[ -f "$VOICE_ONNX" && -f "$VOICE_JSON" ]]; then
+  step "Piper TTS voice model"
+  ok "Voice model already present — skipping download"
+else
+  step "Downloading Piper TTS voice model (en_US-amy-medium)"
+  mkdir -p "$VOICES_DIR"
+  BASE_URL="https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/amy/medium"
+  curl -fL --progress-bar -o "$VOICE_ONNX" "$BASE_URL/en_US-amy-medium.onnx"
+  curl -fL --progress-bar -o "$VOICE_JSON" "$BASE_URL/en_US-amy-medium.onnx.json"
+  ok "Voice model saved to $VOICES_DIR/"
+fi
+
 # ── Voice / STT extras ────────────────────────────────────────────────────────
 if $INSTALL_VOICE; then
   step "Installing voice / STT extras (faster-whisper + sounddevice)"
   pip install -e '.[voice]' --quiet
   ok "Installed .[voice]"
-
-  # Download the Piper TTS voice model if not already present
-  VOICES_DIR="$REPO_DIR/voices"
-  VOICE_ONNX="$VOICES_DIR/en_US-amy-medium.onnx"
-  VOICE_JSON="$VOICES_DIR/en_US-amy-medium.onnx.json"
-  if [[ ! -f "$VOICE_ONNX" ]]; then
-    step "Downloading Piper TTS voice model (en_US-amy-medium)"
-    mkdir -p "$VOICES_DIR"
-    BASE_URL="https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/amy/medium"
-    curl -fL --progress-bar -o "$VOICE_ONNX" "$BASE_URL/en_US-amy-medium.onnx"
-    curl -fL --progress-bar -o "$VOICE_JSON" "$BASE_URL/en_US-amy-medium.onnx.json"
-    ok "Voice model saved to $VOICES_DIR/"
-  else
-    ok "Piper voice model already present — skipping download"
-  fi
 fi
 
 # ── AI brain extras ───────────────────────────────────────────────────────────
@@ -123,16 +129,23 @@ else
   ok ".env already exists — leaving it unchanged"
 fi
 
+# Set or update a KEY=VALUE in the .env file idempotently.
+_set_env() {
+  local key="$1" val="$2"
+  if grep -q "^${key}=" "$ENV_FILE" 2>/dev/null; then
+    sed -i "s|^${key}=.*|${key}=${val}|" "$ENV_FILE"
+  else
+    echo "${key}=${val}" >> "$ENV_FILE"
+  fi
+}
+
 if $INSTALL_AI; then
-  read -rp "  Enter your Anthropic API key (blank to skip): " _ant_key
+  read -rsp "  Enter your Anthropic API key (blank to skip): " _ant_key
+  echo  # newline after silent input
   if [[ -n "$_ant_key" ]]; then
-    {
-      echo ""
-      echo "# Added by setup_pi.sh"
-      echo "ROBO_BRAIN_ENABLED=true"
-      echo "ROBO_ANTHROPIC_API_KEY=$_ant_key"
-    } >> "$ENV_FILE"
-    ok "API key and ROBO_BRAIN_ENABLED=true appended to .env"
+    _set_env "ROBO_BRAIN_ENABLED" "true"
+    _set_env "ROBO_ANTHROPIC_API_KEY" "$_ant_key"
+    ok "API key and ROBO_BRAIN_ENABLED=true written to .env"
   else
     warn "No key entered — set ROBO_BRAIN_ENABLED=true and ROBO_ANTHROPIC_API_KEY in .env later"
   fi
@@ -143,10 +156,15 @@ step "Installing systemd service"
 SERVICE_SRC="$REPO_DIR/systemd/robo.service"
 SERVICE_DST="/etc/systemd/system/robo.service"
 
-sudo cp "$SERVICE_SRC" "$SERVICE_DST"
+# Patch the service file to reflect the actual install location and user,
+# rather than the hard-coded defaults (User=pi, /home/pi/robopy).
+sed \
+  -e "s|User=pi|User=${USER}|g" \
+  -e "s|/home/pi/robopy|${REPO_DIR}|g" \
+  "$SERVICE_SRC" | sudo tee "$SERVICE_DST" > /dev/null
 sudo systemctl daemon-reload
 sudo systemctl enable robo
-ok "robo.service installed and enabled (starts on boot)"
+ok "robo.service installed for user=${USER}, WorkingDirectory=${REPO_DIR}"
 
 read -rp "  Start the service now? [Y/n] " _start_now
 if [[ ! "$_start_now" =~ ^[Nn]$ ]]; then

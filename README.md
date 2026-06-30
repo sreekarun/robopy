@@ -70,7 +70,7 @@ dependencies, creates a virtual environment, and registers the systemd service:
 
 ```bash
 git clone <your-repo> ~/robopy && cd ~/robopy
-bash setup_pi.sh           # base setup (GPIO + camera + Piper TTS)
+bash setup_pi.sh           # base setup (GPIO + camera + Piper TTS + voice model download)
 bash setup_pi.sh --voice   # also install faster-whisper (offline STT)
 bash setup_pi.sh --ai      # also install anthropic SDK + prompt for key
 bash setup_pi.sh --voice --ai  # everything
